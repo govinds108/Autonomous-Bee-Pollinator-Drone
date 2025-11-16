@@ -1,19 +1,12 @@
 from utils import *
-from sac_agent import SACAgent, ReplayBuffer
 import cv2
 import numpy as np
 from ultralytics import YOLO
 
+# Frame size and drone
 w, h = 720, 440
 myDrone = initializeTello()
 device = "cpu"
-
-# Initialize SAC
-state_dim = 4       # [x_error, y_error, area_norm, prev_error]
-action_dim = 3      # [yaw, up_down, forward]
-agent = SACAgent(state_dim, action_dim, device=device)
-replay_buffer = ReplayBuffer(max_size=50000)
-pError = 0
 
 print("Loading YOLO-Nano model...")
 model = YOLO('yolov8n.pt')
@@ -28,48 +21,25 @@ while True:
     # Get drone camera frame
     img = telloGetFrame(myDrone, w, h)
 
-    # Detect flower using YOLO + visual filters (updated utils.detectFlower signature)
+    # Detect flower using YOLO + visual filters
     img, info = detectFlower(img, model, conf_thresh=yolo_confidence,
                               flower_thresh=flower_score_threshold)
-    (cx, cy), area = info[0], info[1]
 
-    # Compute state features
-    x_error = (cx - w / 2) / (w / 2)
-    y_error = (cy - h / 2) / (h / 2)
-    area_norm = area / (w * h)
-    state = np.array([x_error, y_error, area_norm, pError])
+    # detectFlower returns: [[cx, cy], area, conf, flower_score]
+    (cx, cy), area, conf, flower_score = info[0], info[1], info[2], info[3]
 
-    # Select action from SAC
-    action = agent.select_action(state)
-    yaw = int(np.clip(action[0] * 100, -100, 100))
-    up_down = int(np.clip(action[1] * 50, -50, 50))
-    forward = int(np.clip(action[2] * 30, -30, 30))
+    # Overlay detection info on frame
+    cv2.putText(img, f"YOLO conf: {conf:.2f}", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+    cv2.putText(img, f"Flower score: {flower_score:.2f}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    cv2.putText(img, f"Area: {area}", (10, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
 
-    # Send movement commands
-    try:
-        myDrone.send_rc_control(0, forward, up_down, yaw)
-    except Exception:
-        # ignore send failures (drone may be on ground / disconnected)
-        pass
-
-    # Compute reward
-    reward = -abs(x_error) - abs(y_error) + 5 * area_norm
-    done = 0 if area > 0 else 1
-
-    # Next observation (same frame placeholder; could be from next iteration)
-    next_state = np.array([x_error, y_error, area_norm, x_error])
-    replay_buffer.push(state, action, reward, next_state, done)
-
-    # Train SAC agent
-    actor_loss, critic_loss = agent.train(replay_buffer, batch_size=128)
-    if actor_loss is not None:
-        print(f"Actor Loss: {actor_loss:.3f}, Critic Loss: {critic_loss:.3f}")
-
-    # Update tracking error
-    pError = x_error
+    # Draw center and line to image center when a detection exists
+    if cx != 0 or cy != 0:
+        cv2.circle(img, (int(cx), int(cy)), 5, (0, 0, 255), -1)
+        cv2.line(img, (w // 2, h // 2), (int(cx), int(cy)), (255, 0, 0), 1)
 
     # Display feed
-    cv2.imshow("Tello Flower Detection (SAC)", img)
+    cv2.imshow("Tello Flower Detection", img)
 
     # Keyboard controls
     key = cv2.waitKey(1) & 0xFF
