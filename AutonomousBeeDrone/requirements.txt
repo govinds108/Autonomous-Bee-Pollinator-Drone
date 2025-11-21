@@ -1,0 +1,20 @@
+# Autonomous Bee Drone - Required Dependencies
+# Install with: pip install -r requirements.txt
+
+# Drone Control
+djitellopy>=2.5.0
+
+# Computer Vision
+opencv-python>=4.5.0
+ultralytics>=8.0.0
+
+# Numerical Computing
+numpy>=1.21.0
+
+# Standard library (no installation needed)
+# - pickle
+# - pathlib
+# - collections
+# - time
+# - typing
+
