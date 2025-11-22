@@ -20,6 +20,11 @@ explore_steps = 400            # ~8 seconds at ~100Hz
 step_count = 0
 
 yaw_scale = 40                 # smoother, safer yaw control
+# AUTO-APPROACH (move forward when flower is centered)
+approach_enabled = True        # Enable automatic forward movement when centered
+approach_threshold = 0.12      # Fractional X error threshold to consider "centered"
+approach_speed = 20            # Forward velocity (tello units) when approaching
+approach_test_only = True     # Only approach during TEST phase (after training)
 
 
 # INIT DRONE + YOLO MODEL
@@ -191,10 +196,32 @@ while True:
         yaw_cmd = int(raw_yaw)
 
     # -------------------------
-    # Send command (only yaw)
+    # Send command (yaw + exploration motion or test-only forward approach)
     # -------------------------
+    # Determine linear commands separately from policy-based yaw.
     try:
-        myDrone.send_rc_control(0, 0, 0, yaw_cmd)
+        exploration_flag = (current_phase == 'explore') or explore_mode
+
+        if exploration_flag:
+            # During exploration, allow motion in any horizontal direction (not recorded as action)
+            # Keep magnitudes small for safety
+            lr_cmd = int(np.random.uniform(-20, 20))   # left/right
+            fb_cmd = int(np.random.uniform(-20, 20))   # forward/back
+            ud_cmd = 0
+        else:
+            # Default: no exploration movement
+            lr_cmd = 0
+            ud_cmd = 0
+
+            # Test phase: allow forward approach when centered
+            fb_cmd = 0
+            if approach_enabled and area > 0:
+                # Move forward as soon as a flower is detected in frame
+                # (no longer requires the flower to be centered)
+                if (not approach_test_only) or (current_phase == 'test'):
+                    fb_cmd = int(approach_speed)
+
+        myDrone.send_rc_control(lr_cmd, fb_cmd, ud_cmd, yaw_cmd)
     except Exception as e:
         print(f"[ERROR] RC control failed: {e}")
 

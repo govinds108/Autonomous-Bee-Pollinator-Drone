@@ -144,11 +144,33 @@ class PILCOExperienceStorage:
         """
         if len(self.states) == 0:
             return np.array([]), np.array([]), np.array([])
-        
-        S = np.array(self.states, dtype=np.float32)
-        A = np.array(self.actions, dtype=np.float32)
-        S2 = np.array(self.next_states, dtype=np.float32)
-        
+
+        # Normalize stored entries to 1-D float32 arrays
+        def to_1d(a):
+            return np.atleast_1d(np.array(a, dtype=np.float32)).astype(np.float32).reshape(-1)
+
+        states_list = [to_1d(s) for s in self.states]
+        actions_list = [to_1d(a) for a in self.actions]
+        next_list = [to_1d(s2) for s2 in self.next_states]
+
+        # Helper: stack arrays, padding to the maximum length when needed
+        from collections import Counter
+        def stack_with_padding(arr_list, name):
+            lengths = [a.shape[0] for a in arr_list]
+            if len(set(lengths)) == 1:
+                return np.vstack(arr_list)
+            maxlen = max(lengths)
+            print(f"[EXPERIENCE] Warning: inhomogeneous {name} lengths {Counter(lengths)}; padding to {maxlen}")
+            out = np.zeros((len(arr_list), maxlen), dtype=np.float32)
+            for i, a in enumerate(arr_list):
+                L = a.shape[0]
+                out[i, :L] = a
+            return out
+
+        S = stack_with_padding(states_list, 'states')
+        A = stack_with_padding(actions_list, 'actions')
+        S2 = stack_with_padding(next_list, 'next_states')
+
         return S, A, S2
     
     def get_recent(self, n: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -163,12 +185,37 @@ class PILCOExperienceStorage:
         """
         if len(self.states) == 0:
             return np.array([]), np.array([]), np.array([])
-        
+
         n = min(n, len(self.states))
-        S = np.array(list(self.states)[-n:], dtype=np.float32)
-        A = np.array(list(self.actions)[-n:], dtype=np.float32)
-        S2 = np.array(list(self.next_states)[-n:], dtype=np.float32)
-        
+        # Reuse get() logic on recent slices to ensure proper formatting
+        recent_states = list(self.states)[-n:]
+        recent_actions = list(self.actions)[-n:]
+        recent_next = list(self.next_states)[-n:]
+
+        # Normalize to 1-D and pad if needed
+        def to_1d(a):
+            return np.atleast_1d(np.array(a, dtype=np.float32)).astype(np.float32).reshape(-1)
+
+        states_list = [to_1d(s) for s in recent_states]
+        actions_list = [to_1d(a) for a in recent_actions]
+        next_list = [to_1d(s2) for s2 in recent_next]
+
+        from collections import Counter
+        def stack_with_padding(arr_list, name):
+            lengths = [a.shape[0] for a in arr_list]
+            if len(set(lengths)) == 1:
+                return np.vstack(arr_list)
+            maxlen = max(lengths)
+            print(f"[EXPERIENCE] Warning: inhomogeneous recent {name} lengths {Counter(lengths)}; padding to {maxlen}")
+            out = np.zeros((len(arr_list), maxlen), dtype=np.float32)
+            for i, a in enumerate(arr_list):
+                out[i, :a.shape[0]] = a
+            return out
+
+        S = stack_with_padding(states_list, 'states')
+        A = stack_with_padding(actions_list, 'actions')
+        S2 = stack_with_padding(next_list, 'next_states')
+
         return S, A, S2
     
     def get_from_flight(self, flight_id: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -185,11 +232,34 @@ class PILCOExperienceStorage:
         
         if not indices:
             return np.array([]), np.array([]), np.array([])
-        
-        S = np.array([self.states[i] for i in indices], dtype=np.float32)
-        A = np.array([self.actions[i] for i in indices], dtype=np.float32)
-        S2 = np.array([self.next_states[i] for i in indices], dtype=np.float32)
-        
+
+        sel_states = [self.states[i] for i in indices]
+        sel_actions = [self.actions[i] for i in indices]
+        sel_next = [self.next_states[i] for i in indices]
+
+        def to_1d(a):
+            return np.atleast_1d(np.array(a, dtype=np.float32)).astype(np.float32).reshape(-1)
+
+        states_list = [to_1d(s) for s in sel_states]
+        actions_list = [to_1d(a) for a in sel_actions]
+        next_list = [to_1d(s2) for s2 in sel_next]
+
+        from collections import Counter
+        def stack_with_padding(arr_list, name):
+            lengths = [a.shape[0] for a in arr_list]
+            if len(set(lengths)) == 1:
+                return np.vstack(arr_list)
+            maxlen = max(lengths)
+            print(f"[EXPERIENCE] Warning: inhomogeneous flight {name} lengths {Counter(lengths)}; padding to {maxlen}")
+            out = np.zeros((len(arr_list), maxlen), dtype=np.float32)
+            for i, a in enumerate(arr_list):
+                out[i, :a.shape[0]] = a
+            return out
+
+        S = stack_with_padding(states_list, 'states')
+        A = stack_with_padding(actions_list, 'actions')
+        S2 = stack_with_padding(next_list, 'next_states')
+
         return S, A, S2
     
     def _remove_old_data(self):
