@@ -67,9 +67,7 @@ def save_policy(pilco, controller, experience_storage, policy_file=None):
             'Y': gp.Y,
             'lengthscale': gp.lengthscale,
             'variance': gp.variance,
-            'noise': gp.noise,
-            'K': gp.K,  # Precomputed kernel matrix
-            'K_inv': gp.K_inv  # Precomputed inverse
+            'noise': gp.noise
         }
         policy_data['pilco']['gps'].append(gp_data)
         policy_data['gp_hyperparams'].append({

@@ -9,31 +9,26 @@ import numpy as np
 from ultralytics import YOLO
 import time
 from pathlib import Path
+import gc
 
 
-# ===========================
 # SETTINGS
-# ===========================
 w, h = 720, 440
 
 explore_mode = True            # first flight collects data
-explore_steps = 800            # ~8 seconds at ~100Hz
+explore_steps = 400            # ~8 seconds at ~100Hz
 step_count = 0
 
 yaw_scale = 40                 # smoother, safer yaw control
 
 
-# ===========================
 # INIT DRONE + YOLO MODEL
-# ===========================
 myDrone = initializeTello()
 
 print("Loading YOLO-Nano model...")
 model = YOLO("yolov8n.pt")
 
-# ===========================
 # EXPERIENCE STORAGE & POLICY
-# ===========================
 # Initialize experience storage with persistence
 experience_file = Path("saved_experience") / "experience.pkl"
 experience_file.parent.mkdir(parents=True, exist_ok=True)
@@ -75,22 +70,36 @@ else:
 # Start new flight session
 experience.start_new_flight()
 
+# CYCLE SETTINGS
+cycle_count = 0  # Number of complete explore→train cycles
+max_cycles = None  # None = infinite, set to number to limit cycles
+consecutive_cycles_enabled = True  # Enable automatic consecutive explore/train
+
+# Cycle phases: 'explore', 'test', 'wait'
+# - 'explore': collect random data
+# - 'test': use trained policy
+# - 'wait': waiting for user input to start next cycle
+current_phase = 'explore'
+test_steps = 200  # Steps to test policy before returning to exploration
+test_step_count = 0  # Counter for test phase
+
 print("\n" + "="*60)
 print("CONTROLS:")
-print("  't' - Takeoff")
+print("  't' - Takeoff (starts EXPLORE phase)")
 print("  'l' - Land")
-print("  'r' - Retrain PILCO with current experience")
+print("  'n' - Skip TEST phase, return to EXPLORE")
+print("  'c' - Toggle consecutive cycles")
+print("  'r' - Manual retrain PILCO with current experience")
 print("  's' - Save current policy manually")
 print("  'i' - Show experience statistics")
 print("  'q' - Quit and save")
 print("="*60)
-print(f"Mode: {'Exploration' if explore_mode else 'PILCO (loaded policy)'}")
+print(f"Initial mode: {'Exploration' if explore_mode else 'PILCO (loaded policy)'}")
+print(f"Consecutive Cycles: {'ENABLED' if consecutive_cycles_enabled else 'DISABLED'}")
 print(f"Experience: {len(experience)} transitions from {len(set(experience.flight_ids))} flights")
 
 
-# ============================================================
 # SAFE TAKEOFF FUNCTION (fixed)
-# ============================================================
 def safe_takeoff(drone):
     """
     A reliable takeoff routine:
@@ -154,14 +163,21 @@ while True:
     state = get_state(cx, cy, area, w, h)  # shape: (1,)
 
     # -------------------------
-    # CHOOSE ACTION
+    # CHOOSE ACTION BASED ON PHASE
     # -------------------------
-    if explore_mode:
+    if current_phase == 'explore' or explore_mode:
         # Random yaw exploration
         action = np.array([np.random.uniform(-1.0, 1.0)], dtype=np.float32)
+    elif current_phase == 'test':
+        # Use trained PILCO policy
+        if pilco_policy is not None:
+            action = pilco_policy.compute_action(state)  # [-1, 1]
+        else:
+            # Fallback if no policy yet
+            action = np.array([np.random.uniform(-1.0, 1.0)], dtype=np.float32)
     else:
-        # PILCO policy
-        action = pilco_policy.compute_action(state)  # [-1, 1]
+        # Shouldn't reach here, but safety fallback
+        action = np.array([np.random.uniform(-1.0, 1.0)], dtype=np.float32)
 
     # -------------------------
     # Convert action → yaw velocity
@@ -195,7 +211,7 @@ while True:
     # -------------------------
     # TRAIN PILCO AFTER EXPLORATION
     # -------------------------
-    if explore_mode and step_count >= explore_steps:
+    if (current_phase == 'explore' or explore_mode) and step_count >= explore_steps:
         print("\n[POLICY] Exploration complete. Training PILCO model...")
         
         if not experience.is_ready_for_training():
@@ -217,35 +233,66 @@ while True:
             save_policy(pilco_model, controller, experience)
             print("[POLICY] Policy saved automatically after training.")
 
-            explore_mode = False
-            print("[POLICY] PILCO training complete. Switching to control mode.")
+            # Free large PILCO GP structures if they are not needed during testing.
+            # The controller (wrapped by pilco_policy) is sufficient for action computation.
+            try:
+                # Remove large GP matrices to reduce memory pressure
+                if hasattr(pilco_model, 'gps'):
+                    pilco_model.gps = None
+                # Remove reference to the full model (we keep controller in pilco_policy)
+                pilco_model = None
+                gc.collect()
+                print("[POLICY] Freed PILCO GP memory before TEST phase.")
+            except Exception as e:
+                print(f"[POLICY] Warning: could not free PILCO memory: {e}")
 
-    # -------------------------
+            # Transition to test phase
+            current_phase = 'test'
+            test_step_count = 0
+            explore_mode = False
+            print(f"[POLICY] PILCO training complete. Switching to TEST phase ({test_steps} steps).")
+            print("[POLICY] Use 'n' to skip testing and start next exploration cycle.")
+    
+    # AUTO-CYCLE: Test phase → back to Exploration
+    if current_phase == 'test':
+        test_step_count += 1
+        
+        # After testing for enough steps, automatically return to exploration
+        if test_step_count >= test_steps and consecutive_cycles_enabled:
+            cycle_count += 1
+            print(f"\n[CYCLE #{cycle_count}] Test phase complete ({test_step_count} steps).")
+            print(f"[CYCLE #{cycle_count}] Automatic cycle enabled. Returning to EXPLORATION phase.")
+            print(f"[CYCLE #{cycle_count}] Press 't' to take off and continue with next exploration...")
+            
+            current_phase = 'wait'
+            explore_mode = True
+            step_count = 0
+
     # OVERLAYS
-    # -------------------------
     cv2.putText(frame, f"yaw: {yaw_cmd}", (10, 25),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,255), 2)
 
-    cv2.putText(frame,
-                f"Mode: {'Explore' if explore_mode else 'PILCO'}",
-                (10, 55),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                (255,255,0), 2)
+    phase_color = (0, 255, 0) if current_phase == 'explore' else (255, 0, 0) if current_phase == 'test' else (200, 200, 0)
+    phase_text = f"Phase: {current_phase.upper()}"
+    if current_phase == 'test':
+        phase_text += f" ({test_step_count}/{test_steps})"
+    
+    cv2.putText(frame, phase_text, (10, 55),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, phase_color, 2)
     
     # Show experience stats
     exp_stats = experience.get_stats()
     cv2.putText(frame,
                 f"Transitions: {exp_stats['total_transitions']} | "
-                f"Flights: {exp_stats['num_flights']}",
+                f"Flights: {exp_stats['num_flights']} | "
+                f"Cycles: {cycle_count}",
                 (10, 85),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                 (200,200,200), 1)
 
     cv2.imshow("Autonomous Bee Drone (PILCO)", frame)
 
-    # -------------------------
     # KEYBOARD INPUT
-    # -------------------------
     key = cv2.waitKey(1) & 0xFF
 
     if key == ord('q'):
@@ -263,12 +310,39 @@ while True:
     elif key == ord('t'):
         safe_takeoff(myDrone)
         experience.start_new_flight()  # Mark new flight after takeoff
+        step_count = 0  # Reset step counter
+        test_step_count = 0  # Reset test counter
+        current_phase = 'explore'  # Always start in exploration when taking off
+        explore_mode = True
+        print(f"[TAKEOFF] Starting EXPLORATION phase (cycle #{cycle_count + 1})")
 
     elif key == ord('l'):
         try: 
             myDrone.land()
             experience.end_flight()  # Save experience after landing
         except Exception as e: print(f"[ERROR] Land failed: {e}")
+    
+    elif key == ord('n'):
+        # Skip test phase, return to exploration
+        if current_phase == 'test':
+            cycle_count += 1
+            print(f"\n[SKIP] Skipping test phase.")
+            print(f"[CYCLE #{cycle_count}] Returning to EXPLORATION phase.")
+            current_phase = 'wait'
+            explore_mode = True
+            step_count = 0
+        else:
+            print("[SKIP] Can only skip during TEST phase.")
+    
+    elif key == ord('c'):
+        # Toggle consecutive cycles
+        consecutive_cycles_enabled = not consecutive_cycles_enabled
+        status = "ENABLED" if consecutive_cycles_enabled else "DISABLED"
+        print(f"\n[CYCLE] Consecutive cycles: {status}")
+        if consecutive_cycles_enabled:
+            print("[CYCLE] After test phase, auto-returns to exploration.")
+        else:
+            print("[CYCLE] Manual control only. Use 'n' to transition phases manually.")
     
     elif key == ord('r'):
         # Retrain PILCO with current experience
@@ -313,4 +387,7 @@ while True:
         print(f"  Newest data: {stats['newest_transition_age_hours']:.2f} hours ago")
         if stats['transitions_per_flight']:
             print(f"  Transitions per flight: {stats['transitions_per_flight']}")
+        print(f"  Completed cycles: {cycle_count}")
+        print(f"  Current phase: {current_phase.upper()}")
+        print(f"  Consecutive cycles: {'ENABLED' if consecutive_cycles_enabled else 'DISABLED'}")
         print("="*60)
