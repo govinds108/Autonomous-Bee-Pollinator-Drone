@@ -41,6 +41,7 @@ def save_policy(pilco, controller, experience_storage, policy_file=None):
         'controller': {
             'state_dim': controller.state_dim,
             'num_basis': controller.num_basis,
+            'action_dim': getattr(controller, 'action_dim', 1),
             'centers': controller.centers,
             'sigma': controller.sigma,
             'weights': controller.weights
@@ -117,7 +118,8 @@ def load_policy(policy_file=None):
         from rbf_controller import RBFController
         controller = RBFController(
             state_dim=policy_data['controller']['state_dim'],
-            num_basis=policy_data['controller']['num_basis']
+            num_basis=policy_data['controller']['num_basis'],
+            action_dim=policy_data['controller'].get('action_dim', 1)
         )
         controller.centers = policy_data['controller']['centers']
         controller.sigma = policy_data['controller']['sigma']

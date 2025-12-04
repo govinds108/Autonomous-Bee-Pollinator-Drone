@@ -21,10 +21,8 @@ step_count = 0
 yaw_scale = 40                 # smoother, safer yaw control
 test_forward_speed = 15       # slow forward speed during test phase (adjustable)
 # Exploration movement (stronger than test): forward/back and left/right max speeds
-explore_forward_speed_max = 40
+explore_forward_speed_max = 30  # reduced for less aggressive exploration
 explore_lr_speed_max = 30
-# YOLO confidence threshold required to start moving forward during test
-flower_confidence_threshold = 0.35
 
 
 # INIT DRONE + YOLO MODEL
@@ -39,7 +37,7 @@ experience_file = Path("saved_experience") / "experience.pkl"
 experience_file.parent.mkdir(parents=True, exist_ok=True)
 
 experience = PILCOExperienceStorage(
-    max_size=10000,  # Maximum transitions to store
+    max_size=50000,  # Increased buffer to store more diverse transitions
     min_size_for_training=50,  # Minimum needed for training
     storage_file=str(experience_file),
     removal_strategy='fifo'  # Remove oldest when full
@@ -78,7 +76,7 @@ print("\n" + "="*60)
 print("CONTROLS:")
 print("  'm' - Takeoff (drone starts in WAIT state)")
 print("  'e' - Start EXPLORATION (collect random data)")
-print("  'r' - TRAIN PILCO (train policy from collected data)")
+print("  'r' - (disabled) Train on-drone — use offline script instead")
 print("  't' - Start TESTING (run trained policy)")
 print("  'l' - Land")
 print("  'q' - Quit and save")
@@ -153,23 +151,26 @@ while True:
     # CHOOSE ACTION BASED ON PHASE
     # -------------------------
     if current_phase == 'explore':
-        # Random yaw exploration
-        action = np.array([np.random.uniform(-1.0, 1.0)], dtype=np.float32)
+        # Random yaw + forward/backward exploration
+        # Forward-biased: mostly forward with occasional small backward movements
+        yaw_rand = np.random.uniform(-1.0, 1.0)
+        forward_rand = np.random.uniform(-0.2, 0.6)  # -0.2 to 0.6: forward-biased with small backward
+        action = np.array([yaw_rand, forward_rand], dtype=np.float32)
     elif current_phase == 'test':
         # Use trained PILCO policy
         if pilco_policy is not None:
             action = pilco_policy.compute_action(state)  # [-1, 1]
         else:
             # Fallback if no policy yet
-            action = np.array([np.random.uniform(-1.0, 1.0)], dtype=np.float32)
+            action = np.array([np.random.uniform(-1.0, 1.0), 0.0], dtype=np.float32)
     else:
         # Wait phase: no action
-        action = np.array([0.0], dtype=np.float32)
+        action = np.array([0.0, 0.0], dtype=np.float32)
 
     # -------------------------
     # Convert action → yaw velocity
     # -------------------------
-    raw_yaw = action[0] * yaw_scale
+    raw_yaw = float(action[0]) * yaw_scale
 
     # DEADZONE (remove jitter & drift)
     if abs(raw_yaw) < 20:
@@ -188,19 +189,15 @@ while True:
         forward_cmd = 0
 
         if current_phase == 'explore':
-            # Random left/right bursts for exploration (no forward motion).
-            # We avoid forward/back movement during exploration so the agent focuses on yaw control.
+            # Random left/right bursts for exploration (no forward motion here),
+            # but allow a small random forward command so forward behavior is explored.
             left_cmd = int(np.random.randint(-explore_lr_speed_max, explore_lr_speed_max + 1))
-            forward_cmd = 0
+            forward_cmd = int(action[1] * explore_forward_speed_max)
 
         elif current_phase == 'test':
-            # Only move forward if YOLO found a flower with sufficient confidence
-            try:
-                if conf is not None and conf >= flower_confidence_threshold:
-                    forward_cmd = int(test_forward_speed)
-            except Exception:
-                # If `conf` isn't available for any reason, keep forward_cmd = 0
-                forward_cmd = 0
+            # FORWARD is now controlled by the learned policy (action[1]).
+            # Map action[1] ∈ [-1,1] to forward speed; clip to safe range.
+            forward_cmd = int(np.clip(float(action[1]), -1.0, 1.0) * test_forward_speed)
 
         # send_rc_control(left_right, forward_back, up_down, yaw)
         myDrone.send_rc_control(left_cmd, forward_cmd, 0, yaw_cmd)
@@ -208,9 +205,9 @@ while True:
         print(f"[ERROR] RC control failed: {e}")
 
     # -------------------------
-    # Store transition (s, a, s')
+    # Store transition (s, a, s') - during exploration and testing only
     # -------------------------
-    if prev_state is not None:
+    if prev_state is not None and current_phase in ['explore', 'test']:
         experience.add(prev_state, prev_action, state)
 
     prev_state = state
@@ -248,7 +245,6 @@ while True:
         "m: Takeoff",
         "l: Land",
         "e: Exploration (collect)",
-        "r: Train (fit PILCO)",
         "t: Test (run policy)",
         "q: Quit"
     ]
@@ -300,69 +296,18 @@ while True:
         print("[EXPLORE] Starting exploration. Flying randomly and collecting data...")
 
     elif key == ord('r'):
-        # Retrain PILCO with collected experience (can be triggered anytime)
-        # Show TRAINING overlay immediately so user sees feedback
-        training_in_progress = True
-        current_phase = 'training'
-        # show immediate training overlay frame so user sees the phase change
+        # On-drone training has been disabled. Save current flight experience
+        # and inform user to run the offline training script instead.
         try:
-            overlay_frame = frame.copy()
-            cv2.putText(overlay_frame, "Phase: TRAINING", (10, 55),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,165,255), 2)
-            cv2.putText(overlay_frame, "Training PILCO...", (10, 95),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,165,255), 1)
-            cv2.imshow("Autonomous Bee Drone (PILCO)", overlay_frame)
-            cv2.waitKey(1)
-        except Exception:
-            pass
+            experience.end_flight()
+            print("[POLICY] Saved current experience to disk.")
+        except Exception as e:
+            print(f"[POLICY] Warning: could not save experience: {e}")
 
-        if experience.is_ready_for_training():
-            print("\n[POLICY] Training PILCO with collected experience...")
-
-            # Run training inside try/finally so we always clear the flag
-            try:
-                S, A, S2 = experience.get()
-                print(f"[POLICY] Training with {len(S)} transitions from {len(set(experience.flight_ids))} flights")
-
-                pilco, controller = train_pilco(S, A, S2)
-                pilco_model = pilco
-                pilco_policy = PILCOControllerWrapper(controller)
-
-                # Save the trained policy
-                save_policy(pilco_model, controller, experience)
-                print("[POLICY] Policy trained and saved!")
-
-                # Free large PILCO GP structures
-                try:
-                    if hasattr(pilco_model, 'gps'):
-                        pilco_model.gps = None
-                    pilco_model = None
-                    gc.collect()
-                    print("[POLICY] Freed PILCO GP memory after training.")
-                except Exception as e:
-                    print(f"[POLICY] Warning: could not free PILCO memory: {e}")
-
-                # After training, return to WAIT state (manual control)
-                current_phase = 'wait'
-                print("[POLICY] Training complete. Use 't' to start testing or 'e' to resume exploration.")
-            finally:
-                training_in_progress = False
-        else:
-            print(f"[POLICY] Not enough data for training. Need {experience.min_size_for_training}, "
-                  f"have {len(experience)}. Continue exploring.")
-            # Give a brief overlay showing not enough data, then revert
-            try:
-                overlay_frame = frame.copy()
-                cv2.putText(overlay_frame, "Phase: TRAINING", (10, 55),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,165,255), 2)
-                cv2.putText(overlay_frame, "Not enough data to train", (10, 95),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,165,255), 1)
-                cv2.imshow("Autonomous Bee Drone (PILCO)", overlay_frame)
-                cv2.waitKey(500)
-            except Exception:
-                pass
-            training_in_progress = False
-            current_phase = 'wait'
+        print("[POLICY] On-drone training is disabled. Run `python train_offline.py` to train from saved experience.")
+        # Ensure state remains safe
+        training_in_progress = False
+        current_phase = 'wait'
 
     elif key == ord('t'):
         # Start testing immediately (no WAIT requirement)
