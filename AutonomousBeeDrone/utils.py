@@ -88,9 +88,7 @@ def detectFlower(img, model, conf_thresh=0.25, flower_thresh=0.3):
     return img, [[cx, cy], area, conf, flower_score]
 
 
-# ============================================================
-# YAW-ONLY STATE (best for stable control)
-# ============================================================
+# YAW-ONLY STATE
 def get_state(cx, cy, area, w, h):
     x_err = (cx - w/2) / (w/2)
     return np.array([x_err], dtype=np.float32)
