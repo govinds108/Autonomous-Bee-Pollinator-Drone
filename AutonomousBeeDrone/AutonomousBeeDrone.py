@@ -151,11 +151,23 @@ while True:
     # CHOOSE ACTION BASED ON PHASE
     # -------------------------
     if current_phase == 'explore':
-        # Random yaw + forward/backward exploration
-        # Forward-biased: mostly forward with occasional small backward movements
+        # Enhanced exploration with structured forward noise
+        # This improves learning by:
+        # - Exploring full [-1, 1] action space (matches test phase range)
+        # - Adding Gaussian noise for diverse exploration
+        # - Maintaining bias toward forward motion for safety
+        
         yaw_rand = np.random.uniform(-1.0, 1.0)
-        forward_rand = np.random.uniform(-0.2, 0.6)  # -0.2 to 0.6: forward-biased with small backward
-        action = np.array([yaw_rand, forward_rand], dtype=np.float32)
+        
+        # Structured forward exploration with noise
+        # Base: random forward movement biased toward positive values
+        base_forward = np.random.uniform(0.0, 1.0)  # Mostly forward [0, 1]
+        # Add Gaussian noise to explore different forward speeds
+        forward_noise = np.random.normal(0, 0.2)  # Mean=0, Std=0.2
+        # Combine: creates full [-1, 1] exploration while staying mostly forward
+        forward_with_noise = np.clip(base_forward + forward_noise, -1.0, 1.0)
+        
+        action = np.array([yaw_rand, forward_with_noise], dtype=np.float32)
     elif current_phase == 'test':
         # Use trained PILCO policy
         if pilco_policy is not None:

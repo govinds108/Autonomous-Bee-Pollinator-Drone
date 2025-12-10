@@ -18,10 +18,24 @@ class SimplePILCO:
         return np.array([gp.predict(xa)[0].item() for gp in self.gps])
 
     def rollout(self, start_state):
+        """Rollout: predict trajectory and accumulate cost.
+        
+        Supports multi-dimensional actions from controller.
+        
+        Args:
+            start_state: initial state (typically 2D: [x_err, area_norm])
+        Returns:
+            float: accumulated cost over horizon
+        """
         state = start_state.copy()
         cost = 0
         for _ in range(self.horizon):
+            # Get action from controller (can be multi-dimensional)
             action = self.controller.compute_action(state)
+            # Ensure action is properly shaped for GP prediction
+            action = np.atleast_1d(action).flatten()
+            
+            # Predict state delta using GPs
             delta = self.gp_predict(state, action)
             state = state + delta
 
@@ -33,12 +47,15 @@ class SimplePILCO:
             area_norm = float(np.clip(state[1], 0.0, 1.0)) if state.shape[0] > 1 else 0.0
             
             # Exponential area reward: incentivizes getting closer (larger area)
+            # As drone approaches, area_norm increases, making this term negative (reward)
             area_cost = np.exp(1.0) - np.exp(area_norm)
             
             # Quadratic centering penalty: incentivizes keeping flower centered
+            # Penalty is 0 when centered (x_err=0), grows as drone drifts left/right
             centering_cost = x_err * x_err  # Ranges from 0 (centered) to 1 (at edges)
             
-            # Combined cost: 70% area, 30% centering
+            # Combined cost: 70% area reward, 30% centering penalty
+            # This biases the controller to prioritize approaching while maintaining center
             cost += 0.7 * area_cost + 0.3 * centering_cost
         return cost
 
