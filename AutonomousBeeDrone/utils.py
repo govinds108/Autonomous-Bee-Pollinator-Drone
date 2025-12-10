@@ -92,5 +92,11 @@ def detectFlower(img, model, conf_thresh=0.25, flower_thresh=0.3):
 # YAW-ONLY STATE (best for stable control)
 # ============================================================
 def get_state(cx, cy, area, w, h):
+    # x error normalized to [-1, 1]
     x_err = (cx - w/2) / (w/2)
-    return np.array([x_err], dtype=np.float32)
+    # normalize area by image area to get a value in [0, 1]
+    img_area = float(w * h)
+    area_norm = float(area) / img_area if img_area > 0 else 0.0
+    area_norm = np.clip(area_norm, 0.0, 1.0)
+    # State now contains both centering error and normalized bounding-box area
+    return np.array([x_err, area_norm], dtype=np.float32)

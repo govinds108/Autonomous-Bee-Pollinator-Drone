@@ -21,7 +21,9 @@ def train_pilco(S, A, S2):
         U = U[idx]
         Y = Y[idx]
 
-    controller = RBFController(state_dim=X.shape[1], num_basis=10)
+    # Controller must output two actions: yaw control and forward command
+    controller = RBFController(state_dim=X.shape[1], num_basis=10, action_dim=2)
+    # Horizon=50 with iters=50 for sharper optimization on shorter rollouts
     pilco = SimplePILCO(X, U, Y, controller, horizon=30, lr=0.01)
 
     start_state = X[0]
