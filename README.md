@@ -63,27 +63,3 @@ python3 AutonomousBeeDrone.py
 - Model weights: `weights/` or `yolov8n.pt` in `AutonomousBeeDrone/`.
 
 To clear or prune flight data safely, use the `PILCOExperienceStorage` API (see `pilco_experience_storage.py`) or create a small helper script to remove specific flight IDs. Back up files before destructive actions.
-
-**Why the laptop may crash during training**
-
-- The toy GP implementation builds full kernel matrices and computes inverses (O(n^3) time and O(n^2) memory). With hundreds or thousands of samples this can cause large memory and CPU spikes and may destabilize the system.
-- The code was updated to mitigate large spikes by:
-  - Subsampling training data before building GPs (default cap in code: 200 samples).
-  - Avoiding pickling large `K` and `K_inv` matrices to reduce temporary memory during save/load.
-  - Freeing GP structures after training and keeping only the controller for testing.
-
-If you still see crashes:
-
-- Reduce training set size (or lower `max_samples` in `pilco_training.py`).
-- Monitor system memory with `top -o MEM` during a train step.
-- Consider using a sparse GP or GPyTorch for larger datasets.
-
-**Troubleshooting YOLO download error**
-If YOLO fails to download (ConnectionError), download the file manually and place it in `AutonomousBeeDrone/`.
-CLI download command (same as quickstart):
-
-```bash
-cd AutonomousBeeDrone
-python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
-```
-
