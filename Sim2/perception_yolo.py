@@ -23,9 +23,11 @@ def discretize_bbox_state(
     x1, y1, x2, y2 = xyxy
     cx = (x1 + x2) / 2.0
 
-    if cx < img_w / 3.0:
+    center_left = 0.40 * float(img_w)
+    center_right = 0.60 * float(img_w)
+    if cx < center_left:
         region = 0
-    elif cx < 2.0 * img_w / 3.0:
+    elif cx < center_right:
         region = 1
     else:
         region = 2

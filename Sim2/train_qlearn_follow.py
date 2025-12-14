@@ -1,4 +1,5 @@
 import argparse
+import math
 from pathlib import Path
 from typing import Optional, Tuple
 import sys
@@ -12,6 +13,13 @@ if str(_THIS_DIR) not in sys.path:
 
 from perception_yolo import YoloPerception, discretize_bbox_state
 from qlearning import QLearnConfig, QLearningAgent
+
+
+def _default_model_path() -> str:
+    p = (_THIS_DIR / ".." / "AutonomousBeeDrone" / "yolov8n.pt").resolve()
+    if p.exists():
+        return str(p)
+    return "yolov8n.pt"
 
 
 A_NOOP = 0
@@ -39,7 +47,13 @@ def reward_fn(
         r += 5.0 * (float(closeness) - float(prev_close))
 
     if action == A_NOOP:
-        r -= 0.2
+        r -= 0.6
+
+    if region == 1 and action == A_FORWARD:
+        r += 0.4
+
+    if region == 1 and (action == A_YAW_LEFT or action == A_YAW_RIGHT):
+        r -= 0.1
 
     if region == 0 and action == A_YAW_RIGHT:
         r -= 0.5
@@ -51,6 +65,8 @@ def reward_fn(
 
 def annotate(frame_bgr: np.ndarray, det_xyxy: Optional[Tuple[float, float, float, float]], text: str) -> np.ndarray:
     out = frame_bgr.copy()
+    h, w = out.shape[:2]
+    cv2.drawMarker(out, (int(w / 2), int(h / 2)), (255, 255, 255), markerType=cv2.MARKER_CROSS, markerSize=18, thickness=1)
     if det_xyxy is not None:
         x1, y1, x2, y2 = [int(v) for v in det_xyxy]
         cv2.rectangle(out, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -60,10 +76,14 @@ def annotate(frame_bgr: np.ndarray, det_xyxy: Optional[Tuple[float, float, float
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--sim", type=str, choices=["2d", "pybullet"], default="2d")
-    parser.add_argument("--model", type=str, default=str((_THIS_DIR / ".." / "AutonomousBeeDrone" / "yolov8n.pt").resolve()))
+    parser.add_argument("--sim", type=str, choices=["pybullet"], default="pybullet")
+    parser.add_argument("--model", type=str, default=_default_model_path())
     parser.add_argument("--target-class", type=str, default=None)
     parser.add_argument("--imgsz", type=int, default=320)
+    parser.add_argument("--start-y", type=float, default=0.0)
+    parser.add_argument("--start-yaw-deg", type=float, default=0.0)
+    parser.add_argument("--rand-start-y", type=float, default=0.0)
+    parser.add_argument("--rand-start-yaw-deg", type=float, default=0.0)
     parser.add_argument("--episodes", type=int, default=30)
     parser.add_argument("--steps", type=int, default=200)
     parser.add_argument("--gui", action="store_true")
@@ -75,28 +95,25 @@ def main() -> None:
 
     target_class = args.target_class
 
-    if args.sim == "pybullet":
+    gui = True
+    if args.no_gui:
+        gui = False
+    elif args.gui:
         gui = True
-        if args.no_gui:
-            gui = False
-        elif args.gui:
-            gui = True
 
-        from sim_env import PyBulletFollowSim, SimConfig
+    from sim_env import PyBulletFollowSim, SimConfig
 
-        cfg = SimConfig(gui=gui)
-        sim = PyBulletFollowSim(cfg)
-        if target_class is None:
-            target_class = "sports ball"
-    else:
-        from sim_env_2d import Kinematic2DFollowSim, Sim2DConfig
+    cfg = SimConfig(
+        gui=gui,
+        drone_start_pos=(0.0, float(args.start_y), 0.4),
+        drone_start_yaw=math.radians(float(args.start_yaw_deg)),
+    )
+    sim = PyBulletFollowSim(cfg)
+    if target_class is None:
+        target_class = "sports ball"
 
-        cfg = Sim2DConfig()
-        sim = Kinematic2DFollowSim(cfg)
-        if target_class is None:
-            target_class = "bus"
-
-    sim.reset(seed=args.seed)
+    base_start_pos = (0.0, float(args.start_y), 0.4)
+    base_start_yaw = math.radians(float(args.start_yaw_deg))
 
     detector = YoloPerception(model_path=args.model, target_class=target_class, conf_thresh=0.25, device="cpu", imgsz=args.imgsz)
 
@@ -106,7 +123,19 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     for ep in range(args.episodes):
-        sim.reset(seed=None if args.seed is None else args.seed + ep)
+        if args.seed is not None:
+            np.random.seed(int(args.seed) + int(ep))
+
+        dy = float(args.rand_start_y) * (2.0 * float(np.random.rand()) - 1.0)
+        dyaw = math.radians(float(args.rand_start_yaw_deg)) * (2.0 * float(np.random.rand()) - 1.0)
+        start_pos = (base_start_pos[0], base_start_pos[1] + dy, base_start_pos[2])
+        start_yaw = float(base_start_yaw) + float(dyaw)
+
+        sim.reset(
+            seed=None if args.seed is None else int(args.seed) + int(ep),
+            drone_start_pos=start_pos,
+            drone_start_yaw=start_yaw,
+        )
 
         prev_close = None
         ep_ret = 0.0

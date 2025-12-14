@@ -53,7 +53,12 @@ class PyBulletFollowSim:
         p.setGravity(0, 0, -9.8, physicsClientId=self.client_id)
         p.setTimeStep(self.cfg.dt, physicsClientId=self.client_id)
 
-    def reset(self, seed: Optional[int] = None) -> None:
+    def reset(
+        self,
+        seed: Optional[int] = None,
+        drone_start_pos: Optional[Tuple[float, float, float]] = None,
+        drone_start_yaw: Optional[float] = None,
+    ) -> None:
         self.connect()
         if seed is not None:
             np.random.seed(seed)
@@ -65,8 +70,11 @@ class PyBulletFollowSim:
 
         self.plane_id = p.loadURDF("plane.urdf", physicsClientId=self.client_id)
 
-        self._drone_pos = np.array(self.cfg.drone_start_pos, dtype=np.float32)
-        self._drone_yaw = float(self.cfg.drone_start_yaw)
+        start_pos = self.cfg.drone_start_pos if drone_start_pos is None else drone_start_pos
+        start_yaw = self.cfg.drone_start_yaw if drone_start_yaw is None else float(drone_start_yaw)
+
+        self._drone_pos = np.array(start_pos, dtype=np.float32)
+        self._drone_yaw = float(start_yaw)
         self._t = 0.0
 
         drone_col = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.10, 0.10, 0.03], physicsClientId=self.client_id)
