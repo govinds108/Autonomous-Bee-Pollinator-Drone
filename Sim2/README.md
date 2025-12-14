@@ -61,8 +61,6 @@ Where:
 
 The Dockerfile is configured for headless runs. Showing PyBullet GUI and OpenCV windows from Docker requires extra host setup (X11/Wayland forwarding, permissions, etc.).
 
-For TA grading, the **headless runs + printed metrics** are the simplest reproducible path.
-
 ### Train
 
 ```bash
