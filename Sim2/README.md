@@ -11,7 +11,7 @@ This folder contains a simple 3D drone-following simulation (PyBullet) with an o
 - **Training:** Q-learning (`Sim2/train_qlearn_follow.py`) produces a Q-table `Sim2/artifacts/q_table.npy`.
 - **Run:** `Sim2/run_qlearn_follow.py` loads the Q-table and executes the learned policy.
 
-## Docker (recommended for TA)
+## Docker
 
 ### Build
 
@@ -62,19 +62,6 @@ Where:
 The Dockerfile is configured for headless runs. Showing PyBullet GUI and OpenCV windows from Docker requires extra host setup (X11/Wayland forwarding, permissions, etc.).
 
 For TA grading, the **headless runs + printed metrics** are the simplest reproducible path.
-
-## Local (non-Docker) run (optional)
-
-If you run locally, you can use a Python virtual environment (recommended), but it is **not needed when running via Docker**.
-
-From repo root:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -r Sim2/requirements.txt
-```
 
 ### Train
 
