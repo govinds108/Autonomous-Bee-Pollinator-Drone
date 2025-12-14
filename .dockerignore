@@ -1,0 +1,12 @@
+.git
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+.idea/
+.vscode/
+Sim2/artifacts/
+**/*.npy
+**/*.pt
